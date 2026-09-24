@@ -1,173 +1,139 @@
-# 无人船上位机 (Host Computer)
+# 无人船遥控上位机（Host Computer）
 
-基于淘晶驰串口屏 + RA6M5 微控制器的无人船遥控上位机。
+基于淘晶驰串口屏与 Renesas RA6M5 的无人船遥控上位机：采集串口屏触摸指令
+与双摇杆姿态，经 LoRa 转发给船体。仓库内另含一版 STM32H750 串口屏显示
+固件，以及屏端设计素材。
 
 ## 硬件平台
 
 | 组件 | 型号 | 说明 |
-|:-----|:-----|:------|
-| **MCU** | Renesas RA6M5 (R7FA6M5BF) | 主控制器，ARM Cortex-M33 |
-| **串口屏** | 淘晶驰 USART HMI | 触摸屏交互，发组件指令 |
-| **LoRa 模块** | UART 接口 | 无线数传，连接船体 |
-| **摇杆 ×2** | 模拟量摇杆 | 四通道 ADC 采集 |
+| --- | --- | --- |
+| 主控 MCU | Renesas RA6M5（R7FA6M5BF） | Cortex-M33，上位机主控 |
+| 备用平台 | STM32H750VBT6 | 串口屏显示固件所用 MCU |
+| 串口屏 | 淘晶驰 USART HMI | 触摸交互，发送组件指令 |
+| LoRa 模块 | UART 接口 | 无线数传，连接船体 |
+| 摇杆 ×2 | 模拟量摇杆 | 四通道 ADC 采集 |
 
 ## 项目结构
 
-```
-RA/                          ← 瑞萨 RA6M5 项目 (Keil MDK)
-├── src/
-│   ├── hal_entry.c          ← 主程序：帧检测 + ADC + LoRa 发送
-│   ├── debug_uart/          ← UART 驱动 (UART3接收 + UART2发送)
-│   ├── debug_gpt/           ← GPT 定时器驱动 (2ms 周期)
-│   ├── debug_adc/           ← ADC 驱动 + 死区判断 + 摇杆合成
-│   └── debug_lora/          ← LoRa 协议封装 (CRC8 + 打包)
-├── ra_gen/                  ← FSP 生成代码 (勿直接编辑)
-├── ra/fsp/                  ← FSP 驱动库
-└── ra_cfg/                  ← FSP 配置文件
-
-STM32/                       ← STM32H750 项目 (待开发)
-上位机/                      ← 串口屏素材 (HMI 工程、图片、字库)
+```text
+Host computer/
+├── RA/                       RA6M5 上位机工程（主力开发）
+│   ├── src/
+│   │   ├── hal_entry.c       主循环：帧解析 + ADC 扫描 + LoRa 分派
+│   │   ├── debug_uart/       UART3 接收（DMAC）+ UART2 LoRa 发送
+│   │   ├── debug_gpt/        GPT 定时器（2 ms，驱动 ADC）
+│   │   ├── debug_adc/        4 通道 ADC + 死区判断 + 摇杆合成
+│   │   └── debug_lora/       LoRa 协议封装（CRC8 + 打包）
+│   ├── ra_gen/               FSP 生成代码（勿手改）
+│   └── FSP_Project.uvprojx   Keil 工程
+├── STM32/                    STM32H750 串口屏显示固件
+│   └── MDK-ARM/uart_test.uvprojx
+└── 上位机/usart_lcd/         屏端素材：HMI 工程、图片、字库
 ```
 
 ## 数据流
 
-```
-串口屏 (触摸指令)
+```text
+串口屏触摸指令
     │ UART3 (DMAC)
     ▼
-┌─────────────┐    帧检测      ┌──────────┐
-│  UART3 接收  │ ──EE..FF──→  │ 解析组件  │
-│  (环形缓冲区) │              │ 船号/编号/数据│
-└─────────────┘              └────┬─────┘
-                                  │
-摇杆1 (X=AN04, Y=AN05)           │
-摇杆2 (X=AN10, Y=AN12)           │
-    │ ADC (2ms)                   │
-    ▼                             ▼
-┌─────────────┐              ┌──────────┐
-│  死区判断    │  三态(0/1/2) │  LoRa    │
-│  (半量程30%) │ ──────────→ │  打包发送 │
-│  偏差比较    │              │ (CRC8)   │
-└─────────────┘              └────┬─────┘
-                                  │ UART2
-                                  ▼
-                              LoRa 模块 ──→ 船体
+┌───────────────┐    帧检测      ┌──────────────────┐
+│ UART3 环形缓冲 │ ──EE…FF──→   │ 解析船号/组件/数据 │
+└───────────────┘                └────────┬─────────┘
+                                          │
+摇杆1 (X=AN04, Y=AN05)                    │
+摇杆2 (X=AN10, Y=AN12)                    │
+    │ ADC (2 ms)                          │
+    ▼                                     ▼
+┌───────────────┐   三态(0/1/2)    ┌──────────────┐
+│   死区判断     │ ─────────────→  │  LoRa 打包    │
+│ （半量程 30%） │                  │  （CRC8）     │
+└───────────────┘                  └──────┬───────┘
+                                          │ UART2
+                                          ▼
+                                   LoRa 模块 ──→ 船体
 ```
 
 ## 通信协议
 
-### 屏包 (串口屏 → 上位机 → LoRa)
+### 屏包（串口屏 → 上位机 → LoRa）
 
-```
-EE  <船号>  <组件>  <数据>  CRC8  FF
-│    │       │       │       │     │
-帧头  1/2白黑  编号    参数    校验  帧尾
+```text
+EE <船号> <组件> <数据> CRC8 FF     共 6 字节
 ```
 
-| 组件编号 | 名称 | 数据 |
-|:--------:|:-----|:-----|
-| `0x00` | 无组件 | — |
-| `0x01` | 灯 | 0=关, 1=红, 2=白, 3=绿, 4=紫, 5=青, 6=彩 |
-| `0x02` | 水泵 | 0=关, 1=开 |
-| `0x03` | 云台上下 | 占空比 (hex) |
-| `0x04` | 云台左右 | 占空比 (hex) |
-| `0x05` | 机械臂舵机 | 舵机编号 |
-| `0x06` | 机械臂占空比 | 占空比 (hex) |
-| `0x07` | 速度 | 0~10 |
-| `0x08` | 控制锁 | — |
+船号：`0x01` 小白（船 1）、`0x02` 小黑（船 2）。
 
-### 摇杆包 (上位机 → LoRa)
+| 组件 | 值 | 数据 |
+| --- | --- | --- |
+| 灯 | 0x01 | 0 关 / 1 红 / 2 白 / 3 绿 / 4 紫 / 5 青 / 6 彩 |
+| 水泵 | 0x02 | 0 关 / 1 开 |
+| 云台上下 / 左右 | 0x03 / 0x04 | 占空比 |
+| 机械臂舵机 / 占空比 | 0x05 / 0x06 | 舵机号 / 占空比 |
+| 速度 | 0x07 | 0–10 |
+| 控制锁 | 0x08 | — |
 
-```
-CC  01  <方向1>  02  <方向2>  CRC8  33
-│   │    │       │    │       │     │
-控制 小白  方向   小黑  方向    校验  控制帧尾
-帧头 标识         标识
+### 摇杆包（上位机 → LoRa）
+
+```text
+CC 01 <方向1> 02 <方向2> CRC8      共 6 字节
 ```
 
 | 方向值 | 含义 |
-|:------:|:-----|
-| `0x00` | 停止 |
-| `0x01` | 前进 |
-| `0x02` | 后退 |
-| `0x03` | 左转 |
-| `0x04` | 右转 |
+| --- | --- |
+| 0x00 | 停止 |
+| 0x01 | 前进 |
+| 0x02 | 后退 |
+| 0x03 | 左转 |
+| 0x04 | 右转 |
 
 ### CRC8
 
-- 多项式: `0x31` (x⁸ + x⁵ + x⁴ + 1)
-- 初始值: `0x00`
-- 屏包校验范围: `EE 船号 组件 数据` (4 字节)
-- 摇杆包校验范围: `CC 01 方向1 02 方向2` (5 字节)
+- 多项式 `0x31`（x⁸ + x⁵ + x⁴ + 1），初值 `0x00`
+- 屏包校验范围 `EE 船号 组件 数据`（4 字节）
+- 摇杆包校验范围 `CC 01 方向1 02 方向2`（5 字节）
 
 ## 软件模块
 
-### UART (`debug_uart`)
+| 模块 | 主要接口 | 说明 |
+| --- | --- | --- |
+| `debug_uart` | `Uart_Init()` / `Uart3_GetData()` / `Uart2_SendData()` | UART3 用 DMAC 收进 256 字节环形缓冲；UART2 发送靠中断回调管理忙状态 |
+| `debug_gpt` | `Gpt_Init()` / `Gpt_TimeoutCheck()` | 2 ms 周期中断，置位超时标志供主循环轮询 |
+| `debug_adc` | `Adc_CalibrateCenter()` / `Adc_ProcessAll()` / `Adc_JoystickDir()` | 原始值 → 三态方向 → 摇杆方向（0–4）；死区为半量程 30% |
+| `debug_lora` | `Lora_BuildScrPacket()` / `Lora_BuildJoyPacket()` | CRC8 计算与协议打包 |
 
-| 函数 | 说明 |
-|:-----|:------|
-| `Uart_Init()` | 初始化 UART3 (DMAC 接收) + UART2 (LoRa 发送) |
-| `Uart3_GetData()` | 从环形缓冲区读取串口屏数据 |
-| `Uart2_SendData()` | 通过 LoRa 发送数据 (阻塞等待上一包完成) |
-
-- UART3 使用 DMAC0 接收，每字节中断一次，存入 256 字节环形缓冲区
-- UART2 发送通过中断回调管理忙状态
-
-### GPT 定时器 (`debug_gpt`)
-
-| 函数 | 说明 |
-|:-----|:------|
-| `Gpt_Init()` | 初始化 GPT 定时器 (周期模式) |
-| `Gpt_Start()/Stop()` | 启停定时器 |
-| `Gpt_TimeoutCheck()` | 检查 2ms 周期标志 |
-
-- 周期 2ms，触发 ADC 扫描
-
-### ADC (`debug_adc`)
-
-| 函数 | 说明 |
-|:-----|:------|
-| `Adc_Init()` | 初始化 ADC，四通道 (AN04/05/10/12) |
-| `Adc_StartScan()` | 启动单次扫描 |
-| `Adc_CalibrateCenter(n)` | 采样 n 次取平均，校准各通道阈值 |
-| `Adc_ProcessAll()` | 原始值 → 三态方向 (0/1/2) |
-| `Adc_JoystickDir()` | X/Y 方向 → 摇杆方向 (0~4) |
-
-- 死区为半量程的 30%（±614），从中心到两端计算
-- 对角线通过偏差量比较决定方向
-
-### LoRa 协议 (`debug_lora`)
-
-| 函数 | 说明 |
-|:-----|:------|
-| `Lora_CalcCRC8()` | CRC-8 校验计算 |
-| `Lora_BuildScrPacket()` | 构建屏包 |
-| `Lora_BuildJoyPacket()` | 构建摇杆包 |
-| `Lora_SendPacket()` | 通过 UART2 发送 |
-
-## 开发环境
-
-- **IDE**: Keil MDK-ARM V5.43
-- **编译器**: ARMClang V6.24
-- **FSP**: Renesas Flexible Software Package V6.4.0
-- **MCU**: R7FA6M5BF
+主循环两件事：屏包到达即转发；摇杆方向变化即发摇杆包。
 
 ## 构建
 
-1. 使用 RA Configurator (RASC) 生成外设配置
-2. 在 Keil MDK 中打开 `RA/FSP_Project.uvprojx`
-3. 编译并下载
+1. 用 Keil MDK-ARM 打开 `RA/FSP_Project.uvprojx`
+2. Build 并通过 J-Link 烧录
+
+修改引脚 / 时钟 / 中断优先级 / DMA 通道需用 **RASC** 改
+`RA/configuration.xml` 后重新生成代码。
 
 ## 引脚分配
 
 | 引脚 | 功能 | 说明 |
-|:----|:-----|:------|
-| P004 | AN04 | 摇杆1 X 轴 |
-| P005 | AN05 | 摇杆1 Y 轴 |
-| P010 | AN10 | 摇杆2 X 轴 |
-| P014 | AN12 | 摇杆2 Y 轴 |
-| P706 | SCI3 RXD | 串口屏接收 (UART3) |
-| P707 | SCI3 TXD | 串口屏发送 (UART3) |
-| P301 | SCI2 RXD | LoRa 接收 (UART2) |
-| P302 | SCI2 TXD | LoRa 发送 (UART2) |
+| --- | --- | --- |
+| P004 / P005 | AN04 / AN05 | 摇杆 1 X / Y |
+| P010 / P014 | AN10 / AN12 | 摇杆 2 X / Y |
+| P706 / P707 | SCI3 RXD / TXD | UART3，接串口屏 |
+| P301 / P302 | SCI2 RXD / TXD | UART2，接 LoRa |
 
+## 开发环境
+
+- Keil MDK-ARM V5.43 + ARMClang V6.24
+- Renesas FSP v6.4.0
+- 屏端 UI 用**淘晶驰编辑器**修改 `上位机/usart_lcd/*.HMI`
+
+## 相关仓库
+
+同一无人船项目的其他工程：
+
+- [Black_ship][black-ship] — 黑船固件（RA6M5）
+- [White_ship][white-ship] — 白船工程
+
+[black-ship]: https://github.com/sdadz-luo/YSU---Undergraduate-Research-Training-Program---Black_ship
+[white-ship]: https://github.com/sdadz-luo/YSU---Undergraduate-Research-Training-Program---White_ship

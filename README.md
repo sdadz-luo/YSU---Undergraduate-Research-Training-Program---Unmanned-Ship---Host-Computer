@@ -4,6 +4,17 @@
 与双摇杆姿态，经 LoRa 转发给船体。仓库内另含一版 STM32H750 串口屏显示
 固件，以及屏端设计素材。
 
+## 项目组成
+
+燕山大学大创「无人船」项目由本上位机遥控双船协同作业，共三个仓库：
+
+- [Black_ship][black-ship] —— 黑船固件：双模式运动控制、毫米波雷达与 4G 回传
+- [White_ship][white-ship] —— 白船固件：水质、温湿度等多传感器采集与 4G 回传
+- **Host-Computer**（本仓库）—— 上位机：串口屏与双摇杆指令，经 LoRa 转发双船
+
+[black-ship]: https://github.com/sdadz-luo/YSU---Undergraduate-Research-Training-Program---Black_ship
+[white-ship]: https://github.com/sdadz-luo/YSU---Undergraduate-Research-Training-Program---White_ship
+
 ## 硬件平台
 
 | 组件 | 型号 | 说明 |
@@ -127,13 +138,3 @@ CC 01 <方向1> 02 <方向2> CRC8      共 6 字节
 - Keil MDK-ARM V5.43 + ARMClang V6.24
 - Renesas FSP v6.4.0
 - 屏端 UI 用**淘晶驰编辑器**修改 `上位机/usart_lcd/*.HMI`
-
-## 相关仓库
-
-同一无人船项目的其他工程：
-
-- [Black_ship][black-ship] — 黑船固件（RA6M5）
-- [White_ship][white-ship] — 白船工程
-
-[black-ship]: https://github.com/sdadz-luo/YSU---Undergraduate-Research-Training-Program---Black_ship
-[white-ship]: https://github.com/sdadz-luo/YSU---Undergraduate-Research-Training-Program---White_ship
